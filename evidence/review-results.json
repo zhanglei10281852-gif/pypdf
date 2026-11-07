@@ -1,0 +1,45 @@
+{
+  "questionId": "py-pdf-pypdf-71516751-1c12-4557-844f-3482ef3af44d",
+  "expectedSyncRevision": 5,
+  "completionStatus": "部分完成",
+  "collectionDecision": "收录：长程题",
+  "rubricResults": [
+    {
+      "id": 1,
+      "passed": true,
+      "reason": ""
+    },
+    {
+      "id": 2,
+      "passed": false,
+      "reason": "间接 /D 命名 GoTo 页面链接被过滤"
+    },
+    {
+      "id": 3,
+      "passed": false,
+      "reason": "间接 /D 书签仍引用旧名 intro 且读回目标页为 None"
+    },
+    {
+      "id": 4,
+      "passed": false,
+      "reason": "同一 Reader 两次前缀导入后的共享动作书签目标页均为 None"
+    },
+    {
+      "id": 5,
+      "passed": true,
+      "reason": ""
+    },
+    {
+      "id": 6,
+      "passed": true,
+      "reason": ""
+    },
+    {
+      "id": 7,
+      "passed": true,
+      "reason": ""
+    }
+  ],
+  "runResult": "1 通过\n2 未通过 间接 /D 命名 GoTo 页面链接被过滤\n3 未通过 间接 /D 书签仍引用旧名 intro 且读回目标页为 None\n4 未通过 同一 Reader 两次前缀导入后的共享动作书签目标页均为 None\n5 通过\n6 通过\n7 通过",
+  "artifactResult": "1 通过\n2 未通过 间接 /D 命名 GoTo 页面链接被过滤\n3 未通过 间接 /D 书签仍引用旧名 intro 且读回目标页为 None\n4 未通过 同一 Reader 两次前缀导入后的共享动作书签目标页均为 None\n5 通过\n6 通过\n7 通过"
+}

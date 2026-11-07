@@ -6,7 +6,17 @@ import pytest
 
 import pypdf
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import ArrayObject, Destination, DictionaryObject, Fit, NameObject, NullObject, TextStringObject
+from pypdf.generic import (
+    ArrayObject,
+    Destination,
+    DictionaryObject,
+    Fit,
+    NameObject,
+    NullObject,
+    NumberObject,
+    RectangleObject,
+    TextStringObject,
+)
 
 from . import RESOURCE_ROOT, get_data_from_url
 from .test_encryption import HAS_AES
@@ -669,3 +679,462 @@ def test_merge_widget_with_cyclic_parent_chain():
     assert merged_second["/Kids"] == [merged_widget.raw_get("/Parent")]
     fields = [obj for obj in writer._objects if isinstance(obj, DictionaryObject) and "/T" in obj]
     assert len(fields) == 2
+def _link_annotation(source: PdfWriter, entries: dict[str, object]) -> DictionaryObject:
+    annotation = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Link"),
+            NameObject("/Rect"): RectangleObject([0, 0, 10, 10]),
+        }
+    )
+    for key, value in entries.items():
+        annotation[NameObject(key)] = value
+    return source._add_object(annotation)
+
+
+def _build_named_destination_source() -> BytesIO:
+    """
+    Build a 3-page source exercising named destinations and named navigation.
+
+    It contains:
+
+    * four named destinations (including a non-ASCII name and a destination on
+      an unselected page);
+    * link annotations using a named ``/A`` GoTo action, a named ``/Dest``,
+      an undefined name, a URI action and an explicit array destination;
+    * an outline whose first item shares its named GoTo action with a link
+      annotation and whose second item uses an explicit array destination.
+    """
+    source = PdfWriter()
+    for _ in range(3):
+        source.add_blank_page(width=200, height=200)
+    source.add_named_destination("chap1", 0, fit=Fit.xyz(left=10, top=20, zoom=2))
+    source.add_named_destination("chap2", 1, fit=Fit.fit_horizontally(top=199))
+    source.add_named_destination("skip", 2, fit=Fit.fit())
+    source.add_named_destination("anchör", 0, fit=Fit.fit())
+
+    shared_action = source._add_object(
+        DictionaryObject(
+            {
+                NameObject("/S"): NameObject("/GoTo"),
+                NameObject("/D"): TextStringObject("chap1"),
+            }
+        )
+    )
+
+    source.pages[0][NameObject("/Annots")] = ArrayObject(
+        [
+            _link_annotation(source, {"/A": shared_action}),
+            _link_annotation(source, {"/Dest": TextStringObject("chap2")}),
+            _link_annotation(
+                source,
+                {
+                    "/A": DictionaryObject(
+                        {
+                            NameObject("/S"): NameObject("/GoTo"),
+                            NameObject("/D"): TextStringObject("missing"),
+                        }
+                    )
+                },
+            ),
+            _link_annotation(
+                source,
+                {
+                    "/A": DictionaryObject(
+                        {
+                            NameObject("/S"): NameObject("/URI"),
+                            NameObject("/URI"): NameObject("/https://example.com"),
+                        }
+                    )
+                },
+            ),
+            _link_annotation(
+                source,
+                {
+                    # Remote GoTo actions are not named navigation and must be
+                    # imported verbatim.
+                    "/A": DictionaryObject(
+                        {
+                            NameObject("/S"): NameObject("/GoToR"),
+                            NameObject("/F"): NameObject("/other-document.pdf"),
+                            NameObject("/D"): TextStringObject("remote-name"),
+                        }
+                    )
+                },
+            ),
+            _link_annotation(source, {"/Dest": TextStringObject("skip")}),
+            _link_annotation(
+                source,
+                {"/Dest": ArrayObject([source.pages[2].indirect_reference, NameObject("/Fit")])},
+            ),
+        ]
+    )
+
+    chapter1 = source.add_outline_item("Chapter 1", 0, fit=Fit.fit())
+    chapter1.get_object()[NameObject("/A")] = shared_action
+    chapter2 = source.add_outline_item("Chapter 2", 1, fit=Fit.fit_horizontally(top=199))
+    source.add_outline_item("Child of 2", 1, parent=chapter2)
+
+    buffer = BytesIO()
+    source.write(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def _annotation_navigation(page: pypdf.PageObject) -> list[tuple[str, str | None]]:
+    navigation: list[tuple[str, str | None]] = []
+    for reference in page.get("/Annots", []) or []:
+        annotation = reference.get_object()
+        if "/A" in annotation:
+            action = annotation["/A"].get_object()
+            if "/D" in action and isinstance(action["/D"], str):
+                navigation.append((str(action["/S"]), str(action["/D"])))
+            elif "/D" in action:
+                navigation.append((str(action["/S"]), "array"))
+            else:
+                navigation.append((str(action["/S"]), None))
+        elif "/Dest" in annotation:
+            destination = annotation["/Dest"]
+            navigation.append(("/Dest", str(destination) if isinstance(destination, str) else "array"))
+    return navigation
+
+
+def _flatten_outline_titles(items: list[Destination]) -> list[str]:
+    titles: list[str] = []
+    for item in items:
+        if isinstance(item, list):
+            titles.extend(_flatten_outline_titles(item))
+        else:
+            titles.append(item.title)
+    return titles
+
+
+def test_named_destination_prefix_imports_destinations_and_rewrites_navigation():
+    reader = PdfReader(_build_named_destination_source())
+    writer = PdfWriter()
+    writer.append(reader, named_destination_prefix="a-")
+
+    # The names are the verbatim "prefix + source name", including non-ASCII.
+    assert set(writer.named_destinations) == {
+        "a-chap1",
+        "a-chap2",
+        "a-skip",
+        "a-anchör",
+    }
+
+    # The fit mode and its parameters are preserved and pages are retargeted.
+    chap1 = writer.named_destinations["a-chap1"]
+    assert chap1.typ == "/XYZ"
+    assert (chap1.left, chap1.top, chap1.zoom) == (10, 20, 2)
+    assert chap1.page == writer.pages[0].indirect_reference
+    chap2 = writer.named_destinations["a-chap2"]
+    assert chap2.typ == "/FitH"
+    assert chap2.top == 199
+    assert chap2.page == writer.pages[1].indirect_reference
+    assert writer.named_destinations["a-skip"].page == writer.pages[2].indirect_reference
+
+    # Named links are renamed; the undefined name is filtered; URI, remote GoTo
+    # and explicit array navigation are kept with their original meaning.
+    assert _annotation_navigation(writer.pages[0]) == [
+        ("/GoTo", "a-chap1"),
+        ("/Dest", "a-chap2"),
+        ("/URI", None),
+        ("/GoToR", "remote-name"),
+        ("/Dest", "a-skip"),
+        ("/Dest", "array"),
+    ]
+    remote_action = next(
+        annotation.get_object()["/A"].get_object()
+        for annotation in writer.pages[0]["/Annots"]
+        if isinstance(annotation.get_object().get("/A"), DictionaryObject)
+        and annotation.get_object()["/A"].get_object().get("/S") == "/GoToR"
+    )
+    assert str(remote_action["/F"]) == "/other-document.pdf"
+    assert str(remote_action["/D"]) == "remote-name"
+
+    output = BytesIO()
+    writer.write(output)
+    output.seek(0)
+    reread = PdfReader(output)
+
+    assert set(reread.named_destinations) == {
+        "a-chap1",
+        "a-chap2",
+        "a-skip",
+        "a-anchör",
+    }
+    assert _annotation_navigation(reread.pages[0]) == [
+        ("/GoTo", "a-chap1"),
+        ("/Dest", "a-chap2"),
+        ("/URI", None),
+        ("/GoToR", "remote-name"),
+        ("/Dest", "a-skip"),
+        ("/Dest", "array"),
+    ]
+    explicit_link = next(
+        annotation
+        for annotation in reread.pages[0]["/Annots"]
+        if isinstance(annotation.get_object().get("/Dest"), ArrayObject)
+    )
+    assert explicit_link.get_object()["/Dest"][0] == reread.pages[2].indirect_reference
+
+    # Outline titles, hierarchy and target views are preserved; named actions
+    # use the prefixed name.
+    assert _flatten_outline_titles(reread.outline) == [
+        "Chapter 1",
+        "Chapter 2",
+        "Child of 2",
+    ]
+    chapter1_action = reread.outline[0].node["/A"].get_object()
+    assert chapter1_action["/S"] == "/GoTo"
+    assert str(chapter1_action["/D"]) == "a-chap1"
+    chapter2_action = reread.outline[1].node["/A"].get_object()
+    assert chapter2_action["/D"][0] == reread.pages[1].indirect_reference
+    assert chapter2_action["/D"][1] == "/FitH"
+    assert chapter2_action["/D"][2] == 199
+
+
+def test_named_destination_prefix_two_copies_of_same_reader_are_independent():
+    reader = PdfReader(_build_named_destination_source())
+    writer = PdfWriter()
+    writer.append(reader, named_destination_prefix="a-")
+    writer.append(reader, named_destination_prefix="b-")
+
+    # Each copy keeps the navigation within its own page set.
+    first_action = writer.pages[0]["/Annots"][0].get_object()["/A"].get_object()
+    second_action = writer.pages[3]["/Annots"][0].get_object()["/A"].get_object()
+    assert first_action is not second_action
+    assert str(first_action["/D"]) == "a-chap1"
+    assert str(second_action["/D"]) == "b-chap1"
+
+    first_explicit = next(
+        annotation
+        for annotation in writer.pages[0]["/Annots"]
+        if isinstance(annotation.get_object().get("/Dest"), ArrayObject)
+    ).get_object()
+    second_explicit = next(
+        annotation
+        for annotation in writer.pages[3]["/Annots"]
+        if isinstance(annotation.get_object().get("/Dest"), ArrayObject)
+    ).get_object()
+    assert first_explicit["/Dest"][0] == writer.pages[2].indirect_reference
+    assert second_explicit["/Dest"][0] == writer.pages[5].indirect_reference
+
+    # The source reader is not modified by either import.
+    assert set(reader.named_destinations) == {"chap1", "chap2", "skip", "anchör"}
+    source_action = reader.pages[0]["/Annots"][0].get_object()["/A"].get_object()
+    assert str(source_action["/D"]) == "chap1"
+
+    output = BytesIO()
+    writer.write(output)
+    output.seek(0)
+    reread = PdfReader(output)
+
+    assert len(reread.pages) == 6
+    for name, page_index in (
+        ("a-chap1", 0),
+        ("a-chap2", 1),
+        ("a-skip", 2),
+        ("b-chap1", 3),
+        ("b-chap2", 4),
+        ("b-skip", 5),
+    ):
+        assert reread.named_destinations[name].page == reread.pages[page_index].indirect_reference
+    assert _annotation_navigation(reread.pages[0])[0] == ("/GoTo", "a-chap1")
+    assert _annotation_navigation(reread.pages[3])[0] == ("/GoTo", "b-chap1")
+    top_level = [item for item in reread.outline if not isinstance(item, list)]
+    assert [item.title for item in top_level] == [
+        "Chapter 1",
+        "Chapter 2",
+        "Chapter 1",
+        "Chapter 2",
+    ]
+    assert str(top_level[0].node["/A"].get_object()["/D"]) == "a-chap1"
+    assert str(top_level[2].node["/A"].get_object()["/D"]) == "b-chap1"
+
+
+def test_named_destination_prefix_conflict_raises_and_leaves_writer_untouched():
+    buffer = _build_named_destination_source()
+
+    # The output already owns a name that the prefixed import would create.
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.add_named_destination("a-chap1", 0)
+    names_root_before = list(writer.get_named_dest_root())
+
+    with pytest.raises(ValueError, match="a-chap1"):
+        writer.append(PdfReader(BytesIO(buffer.getvalue())), named_destination_prefix="a-")
+    # No page, name or bookmark leaked and the name tree is unchanged.
+    assert len(writer.pages) == 1
+    assert set(writer.named_destinations) == {"a-chap1"}
+    assert len(writer.outline) == 0
+    assert list(writer.get_named_dest_root()) == names_root_before
+
+    # A non-conflicting prefix can be used on the same writer.
+    writer.append(PdfReader(BytesIO(buffer.getvalue())), named_destination_prefix="b-")
+    pages_before = len(writer.pages)
+    names_before = set(writer.named_destinations)
+    with pytest.raises(ValueError, match="b-"):
+        writer.append(PdfReader(BytesIO(buffer.getvalue())), named_destination_prefix="b-")
+    # Again, nothing leaked and existing links are unchanged.
+    assert len(writer.pages) == pages_before
+    assert set(writer.named_destinations) == names_before
+    assert str(writer.pages[1]["/Annots"][0].get_object()["/A"].get_object()["/D"]) == "b-chap1"
+
+    # Retrying with yet another prefix works and the document can be written.
+    writer.append(PdfReader(BytesIO(buffer.getvalue())), named_destination_prefix="c-")
+    output = BytesIO()
+    writer.write(output)
+    output.seek(0)
+    reread = PdfReader(output)
+    assert len(reread.pages) == 7
+    assert "c-chap1" in reread.named_destinations
+
+
+def test_named_destination_prefix_filters_unselected_and_undefined_references():
+    reader = PdfReader(_build_named_destination_source())
+    writer = PdfWriter()
+    writer.append(reader, pages=[0], named_destination_prefix="p-")
+
+    # Only destinations of the selected page are imported.
+    assert set(writer.named_destinations) == {"p-chap1", "p-anchör"}
+
+    # Links to chap2/skip (unselected pages) and "missing" (undefined) are gone.
+    assert _annotation_navigation(writer.pages[0]) == [
+        ("/GoTo", "p-chap1"),
+        ("/URI", None),
+        ("/GoToR", "remote-name"),
+    ]
+
+    # The outline item targeting an unselected page is filtered as well.
+    assert _flatten_outline_titles(writer.outline) == ["Chapter 1"]
+    assert str(writer.outline[0].node["/A"].get_object()["/D"]) == "p-chap1"
+
+
+def test_named_destination_prefix_does_not_resolve_against_other_sources():
+    target = PdfWriter()
+    target.add_blank_page(width=200, height=200)
+    target.add_named_destination("shared", 0)
+    target_buffer = BytesIO()
+    target.write(target_buffer)
+    target_buffer.seek(0)
+
+    link_source = PdfWriter()
+    link_source.add_blank_page(width=200, height=200)
+    link_source.pages[0][NameObject("/Annots")] = ArrayObject(
+        [_link_annotation(link_source, {"/Dest": TextStringObject("shared")})]
+    )
+    link_buffer = BytesIO()
+    link_source.write(link_buffer)
+    link_buffer.seek(0)
+
+    # Legacy behavior: the link is kept and resolves against the output target.
+    legacy = PdfWriter()
+    legacy.append(PdfReader(BytesIO(target_buffer.getvalue())))
+    legacy.append(PdfReader(BytesIO(link_buffer.getvalue())))
+    assert _annotation_navigation(legacy.pages[1]) == [("/Dest", "shared")]
+
+    # Prefixed behavior: the source does not define the name, so the link is
+    # filtered instead of jumping to the other source's same-named target.
+    prefixed = PdfWriter()
+    prefixed.append(
+        PdfReader(BytesIO(target_buffer.getvalue())),
+        named_destination_prefix="t-",
+    )
+    prefixed.append(
+        PdfReader(BytesIO(link_buffer.getvalue())),
+        named_destination_prefix="l-",
+    )
+    assert "t-shared" in prefixed.named_destinations
+    assert len(prefixed.pages[1].get("/Annots", [])) == 0
+
+
+@pytest.mark.parametrize("prefix", [None, ""])
+def test_named_destination_prefix_none_and_empty_keep_legacy_behavior(prefix):
+    buffer = _build_named_destination_source()
+    writer = PdfWriter()
+    writer.append(PdfReader(BytesIO(buffer.getvalue())), named_destination_prefix=prefix)
+    writer.append(PdfReader(BytesIO(buffer.getvalue())), named_destination_prefix=prefix)
+
+    # Duplicate names are silently skipped, as historically.
+    assert set(writer.named_destinations) == {"chap1", "chap2", "skip", "anchör"}
+    assert len(writer.pages) == 6
+    assert _annotation_navigation(writer.pages[0])[0] == ("/GoTo", "chap1")
+
+    # Legacy positional call form stays valid.
+    positional = PdfWriter()
+    positional.add_blank_page(width=100, height=100)
+    positional.merge(0, PdfReader(BytesIO(buffer.getvalue())), None, [0, 1], True, ())
+    assert len(positional.pages) == 3
+    assert "chap1" in positional.named_destinations
+
+
+def test_named_destination_prefix_respects_import_outline_and_annotation_exclusions():
+    reader = PdfReader(_build_named_destination_source())
+
+    without_annotations = PdfWriter()
+    without_annotations.append(reader, named_destination_prefix="x-", excluded_fields=("/Annots",))
+    assert "x-chap1" in without_annotations.named_destinations
+    assert without_annotations.pages[0].get("/Annots") is None
+
+    without_outline = PdfWriter()
+    without_outline.append(reader, named_destination_prefix="x-", import_outline=False)
+    assert "x-chap1" in without_outline.named_destinations
+    assert len(without_outline.outline) == 0
+    assert _annotation_navigation(without_outline.pages[0])[0] == (
+        "/GoTo",
+        "x-chap1",
+    )
+
+
+def test_named_destination_prefix_supports_legacy_catalog_dests():
+    source = PdfWriter()
+    source.add_blank_page(width=200, height=200)
+    source.add_blank_page(width=200, height=200)
+    source.root_object[NameObject("/Dests")] = DictionaryObject(
+        {
+            # Name token key, indirect page reference.
+            NameObject("/old"): ArrayObject([source.pages[1].indirect_reference, NameObject("/Fit")]),
+            # Destination addressing the page by number.
+            NameObject("/num"): ArrayObject([NumberObject(0), NameObject("/Fit")]),
+        }
+    )
+    source.pages[0][NameObject("/Annots")] = ArrayObject(
+        [
+            source._add_object(
+                DictionaryObject(
+                    {
+                        NameObject("/Type"): NameObject("/Annot"),
+                        NameObject("/Subtype"): NameObject("/Link"),
+                        NameObject("/Rect"): RectangleObject([0, 0, 10, 10]),
+                        NameObject("/Dest"): NameObject("/old"),
+                    }
+                )
+            )
+        ]
+    )
+    buffer = BytesIO()
+    source.write(buffer)
+    buffer.seek(0)
+    reader = PdfReader(buffer)
+    assert set(reader.named_destinations) == {"/old", "/num"}
+
+    writer = PdfWriter()
+    writer.append(reader, named_destination_prefix="z-")
+
+    assert set(writer.named_destinations) == {"z-/old", "z-/num"}
+    assert writer.named_destinations["z-/old"].page == writer.pages[1].indirect_reference
+    assert int(writer.named_destinations["z-/num"].page) == 0
+    renamed_link = writer.pages[0]["/Annots"][0].get_object()
+    assert isinstance(renamed_link["/Dest"], TextStringObject)
+    assert str(renamed_link["/Dest"]) == "z-/old"
+
+    output = BytesIO()
+    writer.write(output)
+    output.seek(0)
+    reread = PdfReader(output)
+    assert set(reread.named_destinations) == {"z-/old", "z-/num"}
+    assert str(reread.pages[0]["/Annots"][0].get_object()["/Dest"]) == "z-/old"
+    assert reread.named_destinations["z-/old"].page == reread.pages[1].indirect_reference
+
+

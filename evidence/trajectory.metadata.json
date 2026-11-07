@@ -1,0 +1,16 @@
+{
+  "questionId": "py-pdf-pypdf-71516751-1c12-4557-844f-3482ef3af44d",
+  "title": "PDF 合并时的命名锚点前缀与副本导航隔离",
+  "repoUrl": "https://github.com/py-pdf/pypdf",
+  "version": "1fa0bb663f0e07cd9e36ffa0b218581ed08d2a7b",
+  "researchDirectory": "F:\\swe\\099929\\project-01",
+  "batchDirectory": "F:\\swe\\099929",
+  "sessionId": "573311172224344:a429d40043216a6097be78983bc6ef38_6aef399c6716377646731fd1.6aef399c6716377646731fd4.6aef399c6716377646731fd2:TraeCode CN.3.3.104.no_sid.no_ppe.T(2026/11/7 22:45:48)",
+  "sourceFile": "trae-bridge:bridge_messages",
+  "localFile": "F:\\swe\\099929\\trajectories\\py-pdf-pypdf-71516751-1c12-4557-844f-3482ef3af44-2117aaab\\session-cfa47cc96708be5d.md",
+  "traceFormat": "trae-bridge:bridge_messages",
+  "memorySourceFile": "",
+  "memoryLocalFile": "",
+  "traceUpdatedAt": "2026-11-07T16:19:01.462Z",
+  "archivedAt": "2026-11-07T16:19:03.670Z"
+}

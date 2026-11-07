@@ -1,0 +1,463 @@
+{
+  "fixture": "in-memory serialized PDF; same recorded final production code",
+  "observations": [
+    {
+      "case": "append name-tree",
+      "names": [
+        "P:章节/intro",
+        "P:章节/章节",
+        "shadow"
+      ],
+      "links": [
+        [
+          "/Dest",
+          "P:章节/intro"
+        ],
+        [
+          "/GoTo",
+          "P:章节/intro"
+        ],
+        [
+          "/Dest",
+          [
+            "array",
+            2
+          ]
+        ],
+        [
+          "/URI",
+          "https://example.org/"
+        ],
+        [
+          "/GoToR",
+          "remote-anchor"
+        ]
+      ],
+      "outline": [
+        [
+          0,
+          "Visible title",
+          2,
+          "/XYZ",
+          "P:章节/intro"
+        ],
+        [
+          1,
+          "Nested title",
+          2,
+          "/XYZ",
+          "[IndirectObject(9, 0, 2021115869520), '/XYZ', 5, 6, 2]"
+        ]
+      ]
+    },
+    {
+      "case": "append legacy",
+      "names": [
+        "/shadow",
+        "P:章节//intro",
+        "P:章节//章节"
+      ],
+      "links": [
+        [
+          "/Dest",
+          "P:章节//intro"
+        ],
+        [
+          "/GoTo",
+          "P:章节//intro"
+        ],
+        [
+          "/Dest",
+          [
+            "array",
+            2
+          ]
+        ],
+        [
+          "/URI",
+          "https://example.org/"
+        ],
+        [
+          "/GoToR",
+          "remote-anchor"
+        ]
+      ],
+      "outline": [
+        [
+          0,
+          "Visible title",
+          2,
+          "/XYZ",
+          "P:章节//intro"
+        ],
+        [
+          1,
+          "Nested title",
+          2,
+          "/XYZ",
+          "[IndirectObject(9, 0, 2021115764496), '/XYZ', 5, 6, 2]"
+        ]
+      ]
+    },
+    {
+      "case": "merge name-tree",
+      "names": [
+        "P:章节/intro",
+        "P:章节/章节",
+        "shadow"
+      ],
+      "links": [
+        [
+          "/Dest",
+          "P:章节/intro"
+        ],
+        [
+          "/GoTo",
+          "P:章节/intro"
+        ],
+        [
+          "/Dest",
+          [
+            "array",
+            2
+          ]
+        ],
+        [
+          "/URI",
+          "https://example.org/"
+        ],
+        [
+          "/GoToR",
+          "remote-anchor"
+        ]
+      ],
+      "outline": [
+        [
+          0,
+          "Visible title",
+          2,
+          "/XYZ",
+          "P:章节/intro"
+        ],
+        [
+          1,
+          "Nested title",
+          2,
+          "/XYZ",
+          "[IndirectObject(9, 0, 2021116101456), '/XYZ', 5, 6, 2]"
+        ]
+      ]
+    },
+    {
+      "case": "merge legacy",
+      "names": [
+        "/shadow",
+        "P:章节//intro",
+        "P:章节//章节"
+      ],
+      "links": [
+        [
+          "/Dest",
+          "P:章节//intro"
+        ],
+        [
+          "/GoTo",
+          "P:章节//intro"
+        ],
+        [
+          "/Dest",
+          [
+            "array",
+            2
+          ]
+        ],
+        [
+          "/URI",
+          "https://example.org/"
+        ],
+        [
+          "/GoToR",
+          "remote-anchor"
+        ]
+      ],
+      "outline": [
+        [
+          0,
+          "Visible title",
+          2,
+          "/XYZ",
+          "P:章节//intro"
+        ],
+        [
+          1,
+          "Nested title",
+          2,
+          "/XYZ",
+          "[IndirectObject(9, 0, 2021116198352), '/XYZ', 5, 6, 2]"
+        ]
+      ]
+    },
+    {
+      "case": "append conflict-retry-and-isolation",
+      "conflict": "Named destination 'a-intro' (prefixed from source name 'intro') already exists in the output document.",
+      "state_unchanged": true,
+      "source_unchanged": true,
+      "names": {
+        "a-intro": [
+          2,
+          "/XYZ",
+          [
+            "10",
+            "250",
+            "1.5"
+          ]
+        ],
+        "a-章节": [
+          2,
+          "/FitH",
+          [
+            "123"
+          ]
+        ],
+        "b-intro": [
+          4,
+          "/XYZ",
+          [
+            "10",
+            "250",
+            "1.5"
+          ]
+        ],
+        "b-章节": [
+          4,
+          "/FitH",
+          [
+            "123"
+          ]
+        ]
+      },
+      "outline": [
+        [
+          0,
+          "Visible title",
+          2,
+          "/XYZ",
+          "a-intro"
+        ],
+        [
+          1,
+          "Nested title",
+          2,
+          "/XYZ",
+          "[IndirectObject(6, 0, 2021116360912), '/XYZ', 5, 6, 2]"
+        ],
+        [
+          0,
+          "Visible title",
+          4,
+          "/XYZ",
+          "b-intro"
+        ],
+        [
+          1,
+          "Nested title",
+          4,
+          "/XYZ",
+          "[IndirectObject(21, 0, 2021116360912), '/XYZ', 5, 6, 2]"
+        ]
+      ]
+    },
+    {
+      "case": "merge conflict-retry-and-isolation",
+      "conflict": "Named destination 'a-intro' (prefixed from source name 'intro') already exists in the output document.",
+      "state_unchanged": true,
+      "source_unchanged": true,
+      "names": {
+        "a-intro": [
+          4,
+          "/XYZ",
+          [
+            "10",
+            "250",
+            "1.5"
+          ]
+        ],
+        "a-章节": [
+          4,
+          "/FitH",
+          [
+            "123"
+          ]
+        ],
+        "b-intro": [
+          2,
+          "/XYZ",
+          [
+            "10",
+            "250",
+            "1.5"
+          ]
+        ],
+        "b-章节": [
+          2,
+          "/FitH",
+          [
+            "123"
+          ]
+        ]
+      },
+      "outline": [
+        [
+          0,
+          "Visible title",
+          4,
+          "/XYZ",
+          "a-intro"
+        ],
+        [
+          1,
+          "Nested title",
+          4,
+          "/XYZ",
+          "[IndirectObject(6, 0, 2021116359568), '/XYZ', 5, 6, 2]"
+        ],
+        [
+          0,
+          "Visible title",
+          2,
+          "/XYZ",
+          "b-intro"
+        ],
+        [
+          1,
+          "Nested title",
+          2,
+          "/XYZ",
+          "[IndirectObject(21, 0, 2021116359568), '/XYZ', 5, 6, 2]"
+        ]
+      ]
+    },
+    {
+      "case": "append compatibility none",
+      "passed": true
+    },
+    {
+      "case": "append compatibility annotations",
+      "passed": true
+    },
+    {
+      "case": "append compatibility outline",
+      "passed": true
+    },
+    {
+      "case": "merge compatibility none",
+      "passed": true
+    },
+    {
+      "case": "merge compatibility annotations",
+      "passed": true
+    },
+    {
+      "case": "merge compatibility outline",
+      "passed": true
+    },
+    {
+      "case": "append indirect-D defect",
+      "source_outline_target": 1,
+      "source_and_default_resolve": true,
+      "source_unchanged": true,
+      "output_names": {
+        "a-intro": [
+          2,
+          "/XYZ",
+          [
+            "10",
+            "250",
+            "1.5"
+          ]
+        ],
+        "a-章节": [
+          2,
+          "/FitH",
+          [
+            "123"
+          ]
+        ],
+        "b-intro": [
+          4,
+          "/XYZ",
+          [
+            "10",
+            "250",
+            "1.5"
+          ]
+        ],
+        "b-章节": [
+          4,
+          "/FitH",
+          [
+            "123"
+          ]
+        ]
+      },
+      "named_action_links": [],
+      "outline_names": [
+        "intro",
+        "intro"
+      ],
+      "outline_target_pages": [
+        null,
+        null
+      ]
+    },
+    {
+      "case": "merge indirect-D defect",
+      "source_outline_target": 1,
+      "source_and_default_resolve": true,
+      "source_unchanged": true,
+      "output_names": {
+        "a-intro": [
+          4,
+          "/XYZ",
+          [
+            "10",
+            "250",
+            "1.5"
+          ]
+        ],
+        "a-章节": [
+          4,
+          "/FitH",
+          [
+            "123"
+          ]
+        ],
+        "b-intro": [
+          2,
+          "/XYZ",
+          [
+            "10",
+            "250",
+            "1.5"
+          ]
+        ],
+        "b-章节": [
+          2,
+          "/FitH",
+          [
+            "123"
+          ]
+        ]
+      },
+      "named_action_links": [],
+      "outline_names": [
+        "intro",
+        "intro"
+      ],
+      "outline_target_pages": [
+        null,
+        null
+      ]
+    }
+  ]
+}

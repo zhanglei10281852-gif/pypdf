@@ -137,6 +137,34 @@ class ObjectDeletionFlag(enum.IntFlag):
     IMAGES = XOBJECT_IMAGES | INLINE_IMAGES | DRAWING_IMAGES
 
 
+class _PrefixedNamedDestination:
+    """
+    A source named destination scheduled for import under a prefixed name.
+
+    Attributes:
+        name: The prefixed name under which the destination is imported.
+        destination: The source destination, with its original fit mode and
+            parameters.
+        src_idnum: Object number of the (selected) source page referenced by
+            the destination.
+        page_is_number: When true, the imported destination addresses the page
+            by its output page number; otherwise by an indirect reference.
+
+    """
+
+    def __init__(
+        self,
+        name: str,
+        destination: Destination,
+        src_idnum: int,
+        page_is_number: bool,
+    ) -> None:
+        self.name = name
+        self.destination = destination
+        self.src_idnum = src_idnum
+        self.page_is_number = page_is_number
+
+
 class PdfWriter(PdfDocCommon):
     """
     Write a PDF file out, given pages produced by another class or through
@@ -2691,6 +2719,7 @@ class PdfWriter(PdfDocCommon):
         pages: PageRange | tuple[int, int] | tuple[int, int, int] | list[int] | list[PageObject] | None = None,
         import_outline: bool = True,
         excluded_fields: list[str] | tuple[str, ...] | None = None,
+        named_destination_prefix: str | None = None,
     ) -> None:
         """
         Identical to the :meth:`merge()<merge>` method, but assumes you want to
@@ -2715,6 +2744,13 @@ class PdfWriter(PdfDocCommon):
             excluded_fields: Provide the list of fields/keys to be ignored
                 if ``/Annots`` is part of the list, the annotation will be ignored
                 if ``/B`` is part of the list, the articles will be ignored
+            named_destination_prefix: When given a non-empty string, the named
+                destinations of the selected pages are imported under
+                ``named_destination_prefix + original_name``. Named links and
+                named GoTo outline actions are rewritten to the prefixed names;
+                references that are not defined in the source or that point to
+                pages which are not imported are removed. ``None`` and an empty
+                string keep the historical behavior.
 
         """
         if excluded_fields is None:
@@ -2732,6 +2768,7 @@ class PdfWriter(PdfDocCommon):
                 pages,
                 import_outline,
                 excluded_fields,
+                named_destination_prefix=named_destination_prefix,
             )
         else:  # if isinstance(outline_item, str):
             self.merge(
@@ -2741,6 +2778,7 @@ class PdfWriter(PdfDocCommon):
                 pages,
                 import_outline,
                 excluded_fields,
+                named_destination_prefix=named_destination_prefix,
             )
 
     def merge(
@@ -2751,6 +2789,7 @@ class PdfWriter(PdfDocCommon):
         pages: PageRangeSpec | list[PageObject] | None = None,
         import_outline: bool = True,
         excluded_fields: list[str] | tuple[str, ...] | None = (),
+        named_destination_prefix: str | None = None,
     ) -> None:
         """
         Merge the pages from the given file into the output file at the
@@ -2776,9 +2815,23 @@ class PdfWriter(PdfDocCommon):
             excluded_fields: provide the list of fields/keys to be ignored
                 if ``/Annots`` is part of the list, the annotation will be ignored
                 if ``/B`` is part of the list, the articles will be ignored
+            named_destination_prefix: When given a non-empty string, the named
+                destinations of the selected pages are imported under
+                ``named_destination_prefix + original_name`` (the original name
+                is taken verbatim from the source named destinations). The
+                named GoTo references of the imported page links and outline
+                items are rewritten to the prefixed names; references that are
+                not defined in the source or that point to pages which are not
+                imported are removed. ``None`` and an empty string keep the
+                historical behavior, including the historical handling of
+                duplicate names.
 
         Raises:
             TypeError: The pages attribute is not configured properly
+            ValueError: A prefixed named destination already exists in the
+                output document. Nothing is imported in that case: the writer
+                is left untouched and the call can be retried with another
+                prefix.
 
         """
         if isinstance(fileobj, PdfDocCommon):
@@ -2791,26 +2844,28 @@ class PdfWriter(PdfDocCommon):
 
         if excluded_fields is None:
             excluded_fields = ()
-        # Find the range of pages to merge.
-        if pages is None:
-            pages = list(range(len(reader.pages)))
-        elif isinstance(pages, PageRange):
-            pages = list(range(*pages.indices(len(reader.pages))))
-        elif isinstance(pages, list):
-            pass  # keep unchanged
-        elif isinstance(pages, tuple) and len(pages) <= 3:
-            pages = list(range(*pages))
-        elif not isinstance(pages, tuple):
-            raise TypeError(
-                '"pages" must be a tuple of (start, stop[, step]) or a list'
+        # An empty string is equivalent to None: both keep the legacy behavior.
+        if named_destination_prefix == "":
+            named_destination_prefix = None
+
+        # Resolve the source pages before cloning anything, so the prefixed
+        # named destinations can be planned and name conflicts reported before
+        # the writer is modified in any way.
+        src_page_objects = self._merge__resolve_source_pages(reader, pages)
+
+        prefixed_named_dests: list[_PrefixedNamedDestination] | None = None
+        prefixed_named_dest_names: dict[str, str] = {}
+        if named_destination_prefix is not None:
+            prefixed_named_dests, prefixed_named_dest_names = (
+                self._merge__plan_prefixed_named_dests(
+                    reader=reader,
+                    src_page_objects=src_page_objects,
+                    prefix=named_destination_prefix,
+                )
             )
 
         srcpages = {}
-        for page in pages:
-            if isinstance(page, PageObject):
-                pg = page
-            else:
-                pg = reader.pages[page]
+        for pg in src_page_objects:
             assert pg.indirect_reference is not None
             if position is None:
                 # numbers in the exclude list identifies that the exclusion is
@@ -2831,8 +2886,13 @@ class PdfWriter(PdfDocCommon):
 
         arr: Any
 
-        for dest in reader._named_destinations.values():
-            self._merge__process_named_dests(dest=dest, reader=reader, srcpages=srcpages)
+        if prefixed_named_dests is not None:
+            self._merge__add_prefixed_named_dests(
+                prefixed_named_dests=prefixed_named_dests, srcpages=srcpages
+            )
+        else:
+            for dest in reader._named_destinations.values():
+                self._merge__process_named_dests(dest=dest, reader=reader, srcpages=srcpages)
 
         outline_item_typ: TreeObject
         if outline_item is not None:
@@ -2853,8 +2913,12 @@ class PdfWriter(PdfDocCommon):
                 node=_ro.get(Core.OUTLINES, None), pages=srcpages, reader=reader
             )
             self._insert_filtered_outline(
-                outline, outline_item_typ, None
-            )  # TODO: use before parameter
+                outline,
+                outline_item_typ,
+                None,  # TODO: use before parameter
+                named_destination_prefix=named_destination_prefix,
+                named_destination_map=prefixed_named_dest_names,
+            )
 
         if "/Annots" not in excluded_fields:
             parent_fields: dict[int, DictionaryObject] = {}
@@ -2865,6 +2929,8 @@ class PdfWriter(PdfDocCommon):
                     pages=srcpages,
                     reader=reader,
                     parent_fields=parent_fields,
+                    named_destination_prefix=named_destination_prefix,
+                    named_destination_map=prefixed_named_dest_names,
                 )
                 if len(lst) > 0:
                     pag[NameObject("/Annots")] = lst
@@ -2946,6 +3012,203 @@ class PdfWriter(PdfDocCommon):
                 dest["/Page"].indirect_reference.idnum
             ].indirect_reference
             self.add_named_destination_array(dest["/Title"], arr)
+
+    def _merge__resolve_source_pages(
+        self,
+        reader: PdfReader,
+        pages: PageRangeSpec | list[PageObject] | list[int] | None,
+    ) -> list[PageObject]:
+        """Normalize the ``pages`` selection and resolve it to source pages."""
+        selected_pages: Sequence[PageObject | int]
+        if pages is None:
+            selected_pages = list(range(len(reader.pages)))
+        elif isinstance(pages, PageRange):
+            selected_pages = list(range(*pages.indices(len(reader.pages))))
+        elif isinstance(pages, list):
+            selected_pages = pages  # keep unchanged
+        elif isinstance(pages, tuple) and len(pages) <= 3:
+            selected_pages = list(range(*pages))
+        elif not isinstance(pages, tuple):
+            raise TypeError(
+                '"pages" must be a tuple of (start, stop[, step]) or a list'
+            )
+        else:
+            selected_pages = cast("Sequence[PageObject | int]", pages)
+        return [
+            page if isinstance(page, PageObject) else reader.pages[page]
+            for page in selected_pages
+        ]
+
+    def _merge__plan_prefixed_named_dests(
+        self,
+        *,
+        reader: PdfReader,
+        src_page_objects: list[PageObject],
+        prefix: str,
+    ) -> tuple[list[_PrefixedNamedDestination], dict[str, str]]:
+        """
+        Plan the import of the source named destinations under a prefix.
+
+        Only destinations pointing to one of the selected pages are imported.
+        This runs before the pages are cloned, so a name conflict can be
+        reported without modifying the writer at all.
+
+        Args:
+            reader: The source document.
+            src_page_objects: The selected source pages, in import order.
+            prefix: The prefix prepended verbatim to every source name.
+
+        Returns:
+            A tuple containing:
+
+            * the destinations to import, in source order;
+            * a mapping from every source name that references an imported
+              destination to its prefixed name (used to rewrite links and
+              outline actions).
+
+        Raises:
+            ValueError: A prefixed name is already present in the output
+                document, or two imported destinations would share the same
+                prefixed name.
+
+        """
+        selected_idnums: set[int] = set()
+        for pg in src_page_objects:
+            assert pg.indirect_reference is not None
+            selected_idnums.add(pg.indirect_reference.idnum)
+
+        source_dests = reader.named_destinations
+        # Read-only traversal: do not create a /Names entry in the writer here.
+        existing_names = {str(name) for name in self.named_destinations}
+
+        planned: list[_PrefixedNamedDestination] = []
+        planned_by_destination: dict[int, _PrefixedNamedDestination] = {}
+        scheduled_names: set[str] = set()
+        for dest in source_dests.values():
+            if id(dest) in planned_by_destination:
+                # A name tree destination is also exposed under its title key.
+                continue
+            page = dest["/Page"]
+            if page is None or isinstance(page, NullObject):
+                continue
+            page_is_number = False
+            if isinstance(page, int):
+                # The page reference is a page number (normally only accepted
+                # in external goto actions).
+                try:
+                    pg = reader.pages[page]
+                except IndexError:
+                    continue
+                assert pg.indirect_reference is not None
+                if pg.indirect_reference.idnum not in selected_idnums:
+                    continue
+                src_idnum = pg.indirect_reference.idnum
+                page_is_number = True
+            else:
+                ref = getattr(page, "indirect_reference", None)
+                if ref is None or ref.idnum not in selected_idnums:
+                    continue
+                src_idnum = ref.idnum
+
+            original_name = str(dest["/Title"])
+            new_name = f"{prefix}{original_name}"
+            if new_name in existing_names or new_name in scheduled_names:
+                raise ValueError(
+                    f"Named destination {new_name!r} (prefixed from source "
+                    f"name {original_name!r}) already exists in the output "
+                    "document."
+                )
+            scheduled_names.add(new_name)
+            item = _PrefixedNamedDestination(
+                name=new_name,
+                destination=dest,
+                src_idnum=src_idnum,
+                page_is_number=page_is_number,
+            )
+            planned.append(item)
+            planned_by_destination[id(dest)] = item
+
+        # Expose every key under which the source knows the destination: legacy
+        # /Dests dictionaries and name trees may use different key forms.
+        name_map: dict[str, str] = {}
+        for key, dest in source_dests.items():
+            planned_item = planned_by_destination.get(id(dest))
+            if planned_item is not None:
+                name_map[str(key)] = planned_item.name
+        return planned, name_map
+
+    def _merge__add_prefixed_named_dests(
+        self,
+        *,
+        prefixed_named_dests: list[_PrefixedNamedDestination],
+        srcpages: dict[int, PageObject],
+    ) -> None:
+        """Add the planned named destinations, retargeted at the imported pages."""
+        for item in prefixed_named_dests:
+            arr: Any = item.destination.dest_array
+            if item.page_is_number:
+                target: Any = NumberObject(srcpages[item.src_idnum].page_number)
+            else:
+                target = srcpages[item.src_idnum].indirect_reference
+            arr[NumberObject(0)] = target
+            self.add_named_destination_array(TextStringObject(item.name), arr)
+
+    def _merge__clone_prefixed_action(
+        self,
+        action: PdfObject,
+        named_destination_map: dict[str, str] | None,
+        *,
+        explicit_destination: ArrayObject | None = None,
+    ) -> PdfObject | None:
+        """
+        Clone an outline/link action while prefixing named GoTo references.
+
+        Args:
+            action: The source action (an indirect reference or its object).
+            named_destination_map: Mapping of source names to prefixed names.
+            explicit_destination: When given, an explicit GoTo action has its
+                destination array replaced by this already-retargeted array, so
+                every imported copy keeps the navigation within its own page
+                set.
+
+        Returns:
+            The cloned action (an indirect reference or a direct dictionary),
+            or ``None`` when the action is a named GoTo action whose name is
+            not imported (undefined in the source or pointing to a page which
+            is not part of this import).
+
+        """
+        action_object = action.get_object()
+        if (
+            isinstance(action_object, DictionaryObject)
+            and action_object.get("/S") == "/GoTo"
+        ):
+            destination = action_object.get("/D")
+            if isinstance(destination, str):
+                new_name = (
+                    named_destination_map.get(str(destination))
+                    if named_destination_map is not None
+                    else None
+                )
+                if new_name is None:
+                    return None
+                cloned_action = action_object.clone(
+                    self, force_duplicate=True, ignore_fields=("/D",)
+                )
+                cloned_action[NameObject("/D")] = TextStringObject(new_name)
+                return cloned_action
+            if (
+                isinstance(destination, ArrayObject)
+                and explicit_destination is not None
+            ):
+                cloned_action = action_object.clone(
+                    self, force_duplicate=True, ignore_fields=("/D",)
+                )
+                cloned_action[NameObject("/D")] = explicit_destination
+                return cloned_action
+        # Explicit page array destinations without a retargeted array, URI and
+        # remote actions keep their existing meaning.
+        return action.clone(self)
 
     def _add_articles_thread(
         self,
@@ -3095,6 +3358,8 @@ class PdfWriter(PdfDocCommon):
         pages: dict[int, PageObject],
         reader: PdfReader,
         parent_fields: dict[int, DictionaryObject] | None = None,
+        named_destination_prefix: str | None = None,
+        named_destination_map: dict[str, str] | None = None,
     ) -> list[Destination]:
         outlist = ArrayObject()
         if isinstance(annots, IndirectObject):
@@ -3129,14 +3394,39 @@ class PdfWriter(PdfDocCommon):
                     d = ano["/Dest"]
                     if isinstance(d, str):
                         # it is a named dest
-                        if str(d) in self.get_named_dest_root():
+                        if named_destination_prefix is not None:
+                            new_name = (
+                                named_destination_map.get(str(d))
+                                if named_destination_map is not None
+                                else None
+                            )
+                            if new_name is None:
+                                # Undefined in the source or pointing to a page
+                                # which is not imported: drop it instead of
+                                # letting it resolve against another source.
+                                continue
+                            anc = ano.clone(
+                                self,
+                                force_duplicate=True,
+                                ignore_fields=("/Dest",),
+                            )
+                            anc[NameObject("/Dest")] = TextStringObject(new_name)
+                            outlist.append(self._add_object(anc))
+                        elif str(d) in self.get_named_dest_root():
                             outlist.append(ano.clone(self).indirect_reference)
                     else:
                         if not isinstance(d, ArrayObject) or not d:
                             continue
                         p = self._get_cloned_page(d[0], pages, reader)
                         if p is not None:
-                            anc = ano.clone(self, ignore_fields=("/Dest",))
+                            # With a prefix the annotation is duplicated, so a
+                            # second import of the same reader cannot retarget
+                            # the annotation of the first copy.
+                            anc = ano.clone(
+                                self,
+                                force_duplicate=named_destination_prefix is not None,
+                                ignore_fields=("/Dest",),
+                            )
                             anc[NameObject("/Dest")] = ArrayObject([p, *d[1:]])
                             outlist.append(self._add_object(anc))
             else:
@@ -3145,18 +3435,61 @@ class PdfWriter(PdfDocCommon):
                     continue
                 if isinstance(d, str):
                     # it is a named dest
-                    if str(d) in self.get_named_dest_root():
+                    if named_destination_prefix is not None:
+                        new_name = (
+                            named_destination_map.get(str(d))
+                            if named_destination_map is not None
+                            else None
+                        )
+                        if new_name is None:
+                            # Undefined in the source or pointing to a page
+                            # which is not imported: drop it instead of
+                            # letting it resolve against another source.
+                            continue
+                        anc = ano.clone(
+                            self,
+                            force_duplicate=True,
+                            ignore_fields=("/A",),
+                        )
+                        # The action may be shared with another annotation, an
+                        # outline item or a previous import of the same reader:
+                        # it is duplicated so the other copies are not touched.
+                        cloned_action = self._merge__clone_prefixed_action(
+                            ano.raw_get("/A"), named_destination_map
+                        )
+                        assert cloned_action is not None  # new_name was found above
+                        anc[NameObject("/A")] = cloned_action
+                        outlist.append(self._add_object(anc))
+                    elif str(d) in self.get_named_dest_root():
                         outlist.append(ano.clone(self).indirect_reference)
                 else:
                     if not isinstance(d, ArrayObject) or not d:
                         continue
                     p = self._get_cloned_page(d[0], pages, reader)
                     if p is not None:
-                        anc = ano.clone(self, ignore_fields=("/D",))
-                        cast("DictionaryObject", anc["/A"])[
-                            NameObject("/D")
-                        ] = ArrayObject([p, *d[1:]])
-                        outlist.append(self._add_object(anc))
+                        if named_destination_prefix is not None:
+                            # Duplicate the annotation and its action so each
+                            # import keeps explicit navigation within its own
+                            # page set.
+                            anc = ano.clone(
+                                self,
+                                force_duplicate=True,
+                                ignore_fields=("/A",),
+                            )
+                            cloned_action = self._merge__clone_prefixed_action(
+                                ano.raw_get("/A"),
+                                named_destination_map,
+                                explicit_destination=ArrayObject([p, *d[1:]]),
+                            )
+                            assert cloned_action is not None
+                            anc[NameObject("/A")] = cloned_action
+                            outlist.append(self._add_object(anc))
+                        else:
+                            anc = ano.clone(self, ignore_fields=("/D",))
+                            cast("DictionaryObject", anc["/A"])[
+                                NameObject("/D")
+                            ] = ArrayObject([p, *d[1:]])
+                            outlist.append(self._add_object(anc))
         return outlist
 
     def _clone_widget_annotation(
@@ -3273,13 +3606,33 @@ class PdfWriter(PdfDocCommon):
                 node = node["/Next"]
         return new_outline
 
-    def _clone_outline(self, dest: Destination) -> TreeObject:
+    def _clone_outline(
+        self,
+        dest: Destination,
+        *,
+        named_destination_prefix: str | None = None,
+        named_destination_map: dict[str, str] | None = None,
+    ) -> TreeObject:
         n_ol = TreeObject()
         self._add_object(n_ol)
         n_ol[NameObject("/Title")] = TextStringObject(dest["/Title"])
         if not isinstance(dest["/Page"], NullObject):
             if dest.node is not None and "/A" in dest.node:
-                n_ol[NameObject("/A")] = dest.node["/A"].clone(self)
+                if named_destination_prefix is None:
+                    n_ol[NameObject("/A")] = dest.node["/A"].clone(self)
+                else:
+                    cloned_action = self._merge__clone_prefixed_action(
+                        dest.node.raw_get("/A"),
+                        named_destination_map,
+                        # Named actions are renamed through the map; explicit
+                        # destinations are retargeted at the imported pages.
+                        explicit_destination=dest.dest_array,
+                    )
+                    if cloned_action is not None:
+                        n_ol[NameObject("/A")] = cloned_action
+                    # A named GoTo action whose target is not part of this
+                    # import is dropped instead of keeping a stale name that
+                    # could resolve against another source.
             else:
                 n_ol[NameObject("/Dest")] = dest.dest_array
         # TODO: /SE
@@ -3296,6 +3649,9 @@ class PdfWriter(PdfDocCommon):
         outlines: list[Destination],
         parent: TreeObject | IndirectObject,
         before: TreeObject | IndirectObject | None = None,
+        *,
+        named_destination_prefix: str | None = None,
+        named_destination_map: dict[str, str] | None = None,
     ) -> None:
         for dest in outlines:
             # TODO: can be improved to keep A and SE entries (ignored for the moment)
@@ -3303,9 +3659,19 @@ class PdfWriter(PdfDocCommon):
             if dest.get("/Type", "") == "/Outlines" or "/Title" not in dest:
                 np = parent
             else:
-                np = self._clone_outline(dest)
+                np = self._clone_outline(
+                    dest,
+                    named_destination_prefix=named_destination_prefix,
+                    named_destination_map=named_destination_map,
+                )
                 cast(TreeObject, parent.get_object()).insert_child(np, before, self)
-            self._insert_filtered_outline(dest._filtered_children, np, None)
+            self._insert_filtered_outline(
+                dest._filtered_children,
+                np,
+                None,
+                named_destination_prefix=named_destination_prefix,
+                named_destination_map=named_destination_map,
+            )
 
     def close(self) -> None:
         """Implemented for API harmonization."""
